@@ -46,7 +46,7 @@ echo ""
 
 step "Installing dependencies..."
 apt update -y &>/dev/null
-apt install -y wget curl screen openssl &>/dev/null
+apt install -y wget curl screen openssl iptables-persistent &>/dev/null
 ok "Dependencies installed"
 
 step "Setting up directories..."
@@ -69,18 +69,10 @@ step "Downloading module file..."
 wget -q "https://raw.github.com/http-custom/udp-custom/main/module/module" -O /etc/UDPCustom/module
 ok "Module file downloaded"
 
-step "Prompting for port setup..."
-echo ""
-echo -e " ${YELLOW}Enter the UDP port range for your server.${NC}"
-echo -e " ${WHITE}Example: 1-65535 for full range, or 10000-60000${NC}"
-echo -ne " ${CYAN}❯ Port range (default 1-65535): ${WHITE}"; read port_range
-[[ -z "$port_range" ]] && port_range="1-65535"
-ok "Port range set to $port_range"
-
 step "Creating config..."
-cat > /root/udp/config.json << CONF
+cat > /root/udp/config.json << 'CONF'
 {
-  "listen": ":$port_range",
+  "listen": ":36712",
   "stream_buffer": 33554432,
   "receive_buffer": 83886080,
   "auth": {
@@ -88,7 +80,7 @@ cat > /root/udp/config.json << CONF
   }
 }
 CONF
-ok "Config created (port: $port_range)"
+ok "Config created (port: 36712)"
 
 step "Creating UDP Custom service..."
 cat > /etc/systemd/system/udp-custom.service << 'SVC'
@@ -186,11 +178,17 @@ step "Disabling firewall..."
 ufw disable &>/dev/null
 ok "Firewall disabled"
 
+step "Setting up full port range 1-65535..."
+iptables -t nat -A PREROUTING -p udp --dport 1:65535 -j DNAT --to-destination :36712
+iptables-save > /etc/iptables/rules.v4
+ok "Port range 1-65535 forwarding to 36712 set"
+
 step "Starting services..."
 systemctl daemon-reload
 systemctl enable udpgw &>/dev/null && systemctl start udpgw &>/dev/null
 systemctl enable udp-custom &>/dev/null && systemctl start udp-custom &>/dev/null
 systemctl enable rms-expiry &>/dev/null && systemctl start rms-expiry &>/dev/null
+systemctl enable netfilter-persistent &>/dev/null
 ok "All services started"
 
 echo ""
