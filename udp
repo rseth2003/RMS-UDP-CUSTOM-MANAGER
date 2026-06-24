@@ -1,0 +1,502 @@
+#!/bin/bash
+# ============================================
+#   RMS UDP CUSTOM MANAGER v2.0
+#   By Rodney Mwase Seth
+# ============================================
+
+udp_dir='/etc/UDPCustom'
+source $udp_dir/module
+
+RED='\e[1;31m'
+GREEN='\e[1;32m'
+YELLOW='\e[1;33m'
+CYAN='\e[1;36m'
+WHITE='\e[1;97m'
+MAGENTA='\e[1;35m'
+BLUE='\e[1;34m'
+ORANGE='\e[38;5;214m'
+NC='\e[0m'
+
+request_public_ip=$(grep -m 1 -oE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' <<<"$(wget -T 10 -t 1 -4qO- "http://ip1.dynupdate.no-ip.com/" || curl -m 10 -4Ls "http://ip1.dynupdate.no-ip.com/")")
+
+rms_banner() {
+  clear
+  echo -e "${CYAN}╔══════════════════════════════════════════════╗${NC}"
+  echo -e "${CYAN}║${ORANGE}  ██████╗ ███╗   ███╗███████╗                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${ORANGE}  ██╔══██╗████╗ ████║██╔════╝                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${ORANGE}  ██████╔╝██╔████╔██║███████╗                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${ORANGE}  ██╔══██╗██║╚██╔╝██║╚════██║                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${ORANGE}  ██║  ██║██║ ╚═╝ ██║███████║                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${YELLOW}      UDP CUSTOM MANAGER  v2.0              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${WHITE}        By Rodney Mwase Seth                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${MAGENTA}        Tunnel App : HTTP Custom            ${CYAN}║${NC}"
+  echo -e "${CYAN}╚══════════════════════════════════════════════╝${NC}"
+}
+
+rms_bar() {
+  echo -e "${CYAN}╠══════════════════════════════════════════════╣${NC}"
+}
+
+rms_bar_top() {
+  echo -e "${CYAN}╔══════════════════════════════════════════════╗${NC}"
+}
+
+rms_bar_bot() {
+  echo -e "${CYAN}╚══════════════════════════════════════════════╝${NC}"
+}
+
+rms_line() {
+  echo -e "${CYAN}║${NC}"
+}
+
+# ======== SHOW USERS ========
+show_users() {
+  for u in $(cat /etc/passwd | grep 'home' | grep 'false' | grep -v 'syslog' | grep -v 'hwid' | grep -v 'token' | grep -v '::/' | awk -F ':' '{print $1}'); do
+    echo "$u"
+  done
+}
+
+# ======== USER TABLE ========
+data_user() {
+  cat_users=$(cat "/etc/passwd" | grep 'home' | grep 'false' | grep -v 'syslog' | grep -v '::/' | grep -v 'hwid\|token')
+  if [[ -z "$(echo "${cat_users}" | head -1)" ]]; then
+    echo -e " ${YELLOW}  ⚠  No users registered yet${NC}"
+    return 1
+  fi
+  echo -e " ${CYAN}$(printf '%-3s %-12s %-12s %-18s %-14s %s' '#' 'USER' 'PASS' 'EXPIRES' 'REMAINING' 'STATUS')${NC}"
+  echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
+
+  i=1
+  while read line; do
+    u=$(echo "$line" | awk -F ':' '{print $1}')
+    pass=$(echo "$line" | awk -F ':' '{print $5}' | cut -d ',' -f2)
+    [[ "${#pass}" -gt 12 ]] && pass="••••••••"
+    Limit=$(echo "$line" | awk -F ':' '{print $5}' | cut -d ',' -f1)
+
+    expfile="/etc/rms-users/${u}.expiry"
+    if [[ -f "$expfile" ]]; then
+      exp_ts=$(cat "$expfile")
+      exp_display=$(date -d "@$exp_ts" '+%Y-%m-%d %H:%M')
+      now=$(date +%s)
+      remaining_s=$(( exp_ts - now ))
+      if [[ $remaining_s -le 0 ]]; then
+        remaining="${RED}Expired${NC}"
+        stat="${RED}● BLK${NC}"
+      else
+        rem_h=$(( remaining_s / 3600 ))
+        rem_m=$(( (remaining_s % 3600) / 60 ))
+        rem_s=$(( remaining_s % 60 ))
+        if [[ $rem_h -gt 0 ]]; then
+          remaining="${GREEN}${rem_h}h ${rem_m}m${NC}"
+        elif [[ $rem_m -gt 0 ]]; then
+          remaining="${YELLOW}${rem_m}m ${rem_s}s${NC}"
+        else
+          remaining="${RED}${rem_s}s${NC}"
+        fi
+        stat="${GREEN}● ULK${NC}"
+      fi
+    else
+      fecha=$(chage -l "$u" | sed -n '4p' | awk -F ': ' '{print $2}')
+      exp_display="$fecha"
+      if [[ $(date +%s) -gt $(date '+%s' -d "${fecha}" 2>/dev/null) ]]; then
+        remaining="${RED}Expired${NC}"
+        stat="${RED}● BLK${NC}"
+      else
+        EXPTIME="$(($(($(date '+%s' -d "${fecha}") - $(date +%s))) / 86400))"
+        remaining="${GREEN}${EXPTIME}d${NC}"
+        stat="${GREEN}● ULK${NC}"
+      fi
+    fi
+
+    echo -e " ${ORANGE}$(printf '%-3s' "$i")${NC} ${WHITE}$(printf '%-12s' "$u")${NC} ${WHITE}$(printf '%-12s' "$pass")${NC} ${CYAN}$(printf '%-18s' "$exp_display")${NC} $remaining  $stat"
+    let i++
+  done <<<"$cat_users"
+}
+
+# ======== ADD USER ========
+add_user_core() {
+  local valid=$(date '+%Y-%m-%d' -d "@$4")
+  local osl_v=$(openssl version | awk '{print $2}' | cut -c1-5)
+  if [[ $osl_v == '1.1.1' ]]; then
+    local pass=$(openssl passwd -6 "$2")
+  else
+    local pass=$(openssl passwd -1 "$2")
+  fi
+  useradd -M -s /bin/false -e "$valid" -p "$pass" -c "$3,$2" "$1" 2>/dev/null
+  msj=$?
+}
+
+new_user() {
+  rms_banner
+  rms_bar
+  echo -e "${CYAN}║${YELLOW}           ➕  CREATE USER ACCOUNT            ${CYAN}║${NC}"
+  rms_bar
+  data_user
+  rms_bar
+
+  while true; do
+    echo -ne " ${CYAN}❯ Username        : ${WHITE}"; read nameuser
+    [[ -z "$nameuser" ]] && echo -e "${RED} ✘ Username required${NC}" && continue
+    [[ "$nameuser" == "0" ]] && return
+    [[ "${#nameuser}" -lt 3 ]] && echo -e "${RED} ✘ Min 3 characters${NC}" && continue
+    [[ "${#nameuser}" -gt 12 ]] && echo -e "${RED} ✘ Max 12 characters${NC}" && continue
+    [[ "$(show_users | grep -w "$nameuser")" ]] && echo -e "${RED} ✘ User already exists${NC}" && continue
+    break
+  done
+
+  while true; do
+    echo -ne " ${CYAN}❯ Password        : ${WHITE}"; read userpass
+    [[ -z "$userpass" ]] && echo -e "${RED} ✘ Password required${NC}" && continue
+    [[ "${#userpass}" -lt 3 ]] && echo -e "${RED} ✘ Min 3 characters${NC}" && continue
+    break
+  done
+
+  while true; do
+    echo -ne " ${CYAN}❯ Connection Limit: ${WHITE}"; read limit
+    [[ -z "$limit" ]] && echo -e "${RED} ✘ Limit required${NC}" && continue
+    [[ ! "$limit" =~ ^[0-9]+$ ]] && echo -e "${RED} ✘ Numbers only${NC}" && continue
+    break
+  done
+
+  echo ""
+  echo -e " ${CYAN}❯ Expiry Duration:${NC}"
+  echo -e "   ${GREEN}[1]${NC} ${WHITE}Minutes${NC}"
+  echo -e "   ${GREEN}[2]${NC} ${WHITE}Hours${NC}"
+  echo -e "   ${GREEN}[3]${NC} ${WHITE}Days${NC}"
+  echo ""
+  echo -ne " ${CYAN}❯ Choose (1/2/3)  : ${WHITE}"; read dur_type
+
+  case $dur_type in
+    1)
+      echo -ne " ${CYAN}❯ Number of Minutes: ${WHITE}"; read dur_val
+      total_seconds=$(( dur_val * 60 ))
+      dur_label="${dur_val} minute(s)"
+      ;;
+    2)
+      echo -ne " ${CYAN}❯ Number of Hours  : ${WHITE}"; read dur_val
+      total_seconds=$(( dur_val * 3600 ))
+      dur_label="${dur_val} hour(s)"
+      ;;
+    3)
+      echo -ne " ${CYAN}❯ Number of Days   : ${WHITE}"; read dur_val
+      total_seconds=$(( dur_val * 86400 ))
+      dur_label="${dur_val} day(s)"
+      ;;
+    *)
+      echo -e "${RED} ✘ Invalid option${NC}"
+      return
+      ;;
+  esac
+
+  exp_timestamp=$(( $(date +%s) + total_seconds ))
+  add_user_core "$nameuser" "$userpass" "$limit" "$exp_timestamp"
+
+  if [[ $msj -eq 0 ]]; then
+    mkdir -p /etc/rms-users
+    echo "$exp_timestamp" > "/etc/rms-users/${nameuser}.expiry"
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${GREEN}       ✔  User Created Successfully!          ${CYAN}║${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}║${NC} ${YELLOW} Server IP  :${NC} ${WHITE}$request_public_ip${NC}"
+    echo -e "${CYAN}║${NC} ${YELLOW} Port       :${NC} ${WHITE}36712${NC}"
+    echo -e "${CYAN}║${NC} ${YELLOW} Username   :${NC} ${WHITE}$nameuser${NC}"
+    echo -e "${CYAN}║${NC} ${YELLOW} Password   :${NC} ${WHITE}$userpass${NC}"
+    echo -e "${CYAN}║${NC} ${YELLOW} Duration   :${NC} ${WHITE}$dur_label${NC}"
+    echo -e "${CYAN}║${NC} ${YELLOW} Expires    :${NC} ${WHITE}$(date -d "@$exp_timestamp" '+%Y-%m-%d %H:%M:%S')${NC}"
+    echo -e "${CYAN}║${NC} ${YELLOW} Limit      :${NC} ${WHITE}$limit connections${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════╝${NC}"
+  else
+    echo -e "${RED} ✘ Error: User not created${NC}"
+  fi
+  echo -ne "\n ${CYAN}❯ Press enter to continue...${NC}"; read dummy
+}
+
+# ======== REMOVE USER ========
+rm_user() {
+  pkill -u $1 2>/dev/null
+  kill -9 $(ps -u "$1" -o pid= 2>/dev/null) 2>/dev/null
+  userdel --force "$1" 2>/dev/null
+  rm -f "/etc/rms-users/${1}.expiry"
+  msj=$?
+}
+
+remove_user() {
+  rms_banner
+  rms_bar
+  echo -e "${CYAN}║${RED}            🗑  REMOVE USER                   ${CYAN}║${NC}"
+  rms_bar
+  data_user
+  rms_bar
+  echo -e " ${RED}[0]${NC} ${WHITE}GO BACK${NC}"
+  rms_bar
+  echo -ne " ${CYAN}❯ Type username to remove: ${WHITE}"; read user_del
+  [[ "$user_del" == "0" ]] && return
+  [[ -z "$user_del" ]] && echo -e "${RED} ✘ Invalid${NC}" && return
+
+  rm_user "$user_del"
+  if [[ $msj -eq 0 ]]; then
+    echo -e "${GREEN} ✔ User ${WHITE}$user_del${GREEN} removed successfully${NC}"
+  else
+    echo -e "${RED} ✘ Failed to remove user${NC}"
+  fi
+  echo -ne "\n ${CYAN}❯ Press enter to continue...${NC}"; read dummy
+}
+
+# ======== BLOCK/UNBLOCK ========
+block_user() {
+  rms_banner
+  rms_bar
+  echo -e "${CYAN}║${YELLOW}         🔒  BLOCK / UNBLOCK USER             ${CYAN}║${NC}"
+  rms_bar
+  data_user
+  rms_bar
+  echo -e " ${RED}[0]${NC} ${WHITE}GO BACK${NC}"
+  rms_bar
+  echo -ne " ${CYAN}❯ Type username: ${WHITE}"; read user_sel
+  [[ "$user_sel" == "0" ]] && return
+  [[ -z "$user_sel" ]] && return
+
+  if [[ $(passwd --status $user_sel 2>/dev/null | cut -d ' ' -f2) == "P" ]]; then
+    pkill -u "$user_sel" 2>/dev/null
+    usermod -L "$user_sel" 2>/dev/null
+    echo -e "${RED} ✘ $user_sel has been BLOCKED and kicked${NC}"
+  else
+    usermod -U "$user_sel" 2>/dev/null
+    echo -e "${GREEN} ✔ $user_sel has been UNBLOCKED${NC}"
+  fi
+  echo -ne "\n ${CYAN}❯ Press enter to continue...${NC}"; read dummy
+}
+
+# ======== RENEW USER ========
+renew_user() {
+  rms_banner
+  rms_bar
+  echo -e "${CYAN}║${GREEN}           🔄  RENEW USER                     ${CYAN}║${NC}"
+  rms_bar
+  data_user
+  rms_bar
+  echo -e " ${RED}[0]${NC} ${WHITE}GO BACK${NC}"
+  rms_bar
+  echo -ne " ${CYAN}❯ Type username to renew: ${WHITE}"; read useredit
+  [[ "$useredit" == "0" ]] && return
+  [[ -z "$useredit" ]] && return
+
+  echo ""
+  echo -e " ${CYAN}❯ Renewal Duration:${NC}"
+  echo -e "   ${GREEN}[1]${NC} ${WHITE}Minutes${NC}"
+  echo -e "   ${GREEN}[2]${NC} ${WHITE}Hours${NC}"
+  echo -e "   ${GREEN}[3]${NC} ${WHITE}Days${NC}"
+  echo ""
+  echo -ne " ${CYAN}❯ Choose (1/2/3): ${WHITE}"; read dur_type
+
+  case $dur_type in
+    1)
+      echo -ne " ${CYAN}❯ Minutes: ${WHITE}"; read dur_val
+      total_seconds=$(( dur_val * 60 ))
+      dur_label="${dur_val} minute(s)"
+      ;;
+    2)
+      echo -ne " ${CYAN}❯ Hours: ${WHITE}"; read dur_val
+      total_seconds=$(( dur_val * 3600 ))
+      dur_label="${dur_val} hour(s)"
+      ;;
+    3)
+      echo -ne " ${CYAN}❯ Days: ${WHITE}"; read dur_val
+      total_seconds=$(( dur_val * 86400 ))
+      dur_label="${dur_val} day(s)"
+      ;;
+    *)
+      echo -e "${RED} ✘ Invalid option${NC}"
+      return
+      ;;
+  esac
+
+  exp_timestamp=$(( $(date +%s) + total_seconds ))
+  exp_date=$(date '+%Y-%m-%d' -d "@$exp_timestamp")
+  chage -E "$exp_date" "$useredit" 2>/dev/null
+  mkdir -p /etc/rms-users
+  echo "$exp_timestamp" > "/etc/rms-users/${useredit}.expiry"
+  usermod -U "$useredit" 2>/dev/null
+
+  echo ""
+  echo -e "${GREEN} ✔ $useredit renewed for $dur_label${NC}"
+  echo -e "${GREEN} ✔ New expiry: $(date -d "@$exp_timestamp" '+%Y-%m-%d %H:%M:%S')${NC}"
+  echo -ne "\n ${CYAN}❯ Press enter to continue...${NC}"; read dummy
+}
+
+# ======== VPS INFO ========
+vps_info() {
+  rms_banner
+  rms_bar
+  echo -e "${CYAN}║${BLUE}           📊  VPS INFORMATION               ${CYAN}║${NC}"
+  rms_bar
+  echo -e " ${CYAN}❯ IP Address  :${NC} ${WHITE}$request_public_ip${NC}"
+  echo -e " ${CYAN}❯ Hostname    :${NC} ${WHITE}$(hostname)${NC}"
+  echo -e " ${CYAN}❯ OS          :${NC} ${WHITE}$(cat /etc/issue.net | head -1)${NC}"
+  echo -e " ${CYAN}❯ Kernel      :${NC} ${WHITE}$(uname -r)${NC}"
+  echo -e " ${CYAN}❯ Uptime      :${NC} ${WHITE}$(uptime -p)${NC}"
+  echo -e " ${CYAN}❯ CPU Load    :${NC} ${WHITE}$(top -bn1 | awk '/Cpu/ { cpu = "" 100 - $8 "%" }; END { print cpu }')${NC}"
+  echo -e " ${CYAN}❯ RAM Usage   :${NC} ${WHITE}$(free -m | awk 'NR==2{printf "%.2f%%", $3*100/$2 }')${NC}"
+  echo -e " ${CYAN}❯ Disk Usage  :${NC} ${WHITE}$(df -h / | awk 'NR==2{print $3"/"$2" ("$5")"}')${NC}"
+  echo -e " ${CYAN}❯ UDP Port    :${NC} ${WHITE}36712${NC}"
+  echo -ne " ${CYAN}❯ UDP Custom  :${NC} "
+  systemctl is-active udp-custom &>/dev/null && echo -e "${GREEN}● RUNNING${NC}" || echo -e "${RED}● STOPPED${NC}"
+  echo -ne " ${CYAN}❯ UDPGW       :${NC} "
+  systemctl is-active udpgw &>/dev/null && echo -e "${GREEN}● RUNNING${NC}" || echo -e "${RED}● STOPPED${NC}"
+  echo -ne " ${CYAN}❯ RMS Expiry  :${NC} "
+  systemctl is-active rms-expiry &>/dev/null && echo -e "${GREEN}● RUNNING${NC}" || echo -e "${RED}● STOPPED${NC}"
+  echo -e " ${CYAN}❯ Date        :${NC} ${WHITE}$(date '+%A %d %B %Y %H:%M:%S')${NC}"
+  rms_bar_bot
+  echo -ne "\n ${CYAN}❯ Press enter to continue...${NC}"; read dummy
+}
+
+# ======== EXPIRY LOG ========
+expiry_log() {
+  rms_banner
+  rms_bar
+  echo -e "${CYAN}║${MAGENTA}           📋  EXPIRY LOG                     ${CYAN}║${NC}"
+  rms_bar
+  if [[ ! -s /var/log/rms-expiry.log ]]; then
+    echo -e " ${YELLOW}  ⚠  No expiry events logged yet${NC}"
+  else
+    tail -20 /var/log/rms-expiry.log | while read line; do
+      echo -e " ${RED}▸${NC} ${WHITE}$line${NC}"
+    done
+  fi
+  rms_bar_bot
+  echo -ne "\n ${CYAN}❯ Press enter to continue...${NC}"; read dummy
+}
+
+# ======== UDP TOGGLE ========
+reset_udp_custom() {
+  if [[ $(systemctl is-active udp-custom) == 'active' ]]; then
+    systemctl stop udp-custom && systemctl disable udp-custom
+    echo -e "${RED} ✘ UDP-Custom STOPPED${NC}"
+  else
+    systemctl start udp-custom && systemctl enable udp-custom
+    systemctl is-active udp-custom &>/dev/null && echo -e "${GREEN} ✔ UDP-Custom STARTED${NC}" || echo -e "${RED} ✘ Failed to start${NC}"
+  fi
+  echo -ne "\n ${CYAN}❯ Press enter to continue...${NC}"; read dummy
+}
+
+# ======== TWEAK SPEED ========
+tweak_udp_speed() {
+  rms_banner
+  rms_bar
+  echo -e "${CYAN}║${RED}      ⚡  TWEAK UDP SPEED [CAUTION!]          ${CYAN}║${NC}"
+  rms_bar
+  echo -e "${RED}  ⚠  This may or may not work on your OS${NC}"
+  sleep 2
+  echo 0 >/proc/sys/net/ipv4/tcp_timestamps
+  echo 4194304 >/proc/sys/net/core/wmem_max
+  echo 4194304 >/proc/sys/net/core/rmem_max
+  echo 16384 87380 16777216 >/proc/sys/net/ipv4/tcp_wmem
+  echo 16384 87380 16777216 >/proc/sys/net/ipv4/tcp_rmem
+  echo 4096 >/proc/sys/net/ipv4/tcp_max_syn_backlog
+  ulimit -n 65535
+  systemctl restart NetworkManager 2>/dev/null
+  sleep 2
+  echo -e "${GREEN} ✔ Speed tweak applied!${NC}"
+  rms_bar_bot
+  echo -ne "\n ${CYAN}❯ Press enter to continue...${NC}"; read dummy
+}
+
+# ======== UNINSTALL ========
+uninstall_rms() {
+  rms_banner
+  rms_bar
+  echo -e "${CYAN}║${RED}        🗑  UNINSTALL RMS MANAGER             ${CYAN}║${NC}"
+  rms_bar
+  echo -ne " ${RED}❯ Are you sure? (y/N): ${WHITE}"; read confirm
+  [[ "$confirm" != "y" && "$confirm" != "Y" ]] && return
+  systemctl stop udp-custom udpgw rms-expiry 2>/dev/null
+  systemctl disable udp-custom udpgw rms-expiry 2>/dev/null
+  rm -rf /etc/systemd/system/udp-custom.service
+  rm -rf /etc/systemd/system/udpgw.service
+  rm -rf /etc/systemd/system/rms-expiry.service
+  rm -rf /root/udp /etc/UDPCustom /bin/udpgw
+  rm -rf /etc/rms-users /var/log/rms-expiry.log /etc/rms-expiry.sh
+  systemctl daemon-reload
+  echo -e "${GREEN} ✔ Uninstallation complete${NC}"
+  rm -rf /usr/bin/udp
+  exit
+}
+
+# ======== UDP SUBMENU ========
+menu_udp_custom() {
+  while true; do
+    rms_banner
+    rms_bar
+    ram=$(free -m | awk 'NR==2{printf "%.2f%%", $3*100/$2 }')
+    cpu=$(top -bn1 | awk '/Cpu/ { cpu = "" 100 - $8 "%" }; END { print cpu }')
+    echo -ne " ${CYAN}❯ IP:${NC} ${WHITE}$request_public_ip${NC}  ${CYAN}RAM:${NC} ${WHITE}$ram${NC}  ${CYAN}CPU:${NC} ${WHITE}$cpu${NC}  UDP: "
+    systemctl is-active udp-custom &>/dev/null && echo -e "${GREEN}● ON${NC}" || echo -e "${RED}● OFF${NC}"
+    rms_bar
+    echo -e "${CYAN}║${YELLOW}         UDP CUSTOM MANAGER MENU              ${CYAN}║${NC}"
+    rms_bar
+    echo -e "  ${GREEN}[1]${NC}  ${WHITE}➕  Create User${NC}"
+    echo -e "  ${RED}[2]${NC}  ${WHITE}🗑  Remove User${NC}"
+    echo -e "  ${YELLOW}[3]${NC}  ${WHITE}🔄  Renew User${NC}"
+    echo -e "  ${BLUE}[4]${NC}  ${WHITE}🔒  Block / Unblock User${NC}"
+    echo -e "  ${CYAN}[5]${NC}  ${WHITE}👥  User Details${NC}"
+    echo -e "  ${MAGENTA}[6]${NC}  ${WHITE}📋  Expiry Log${NC}"
+    echo -e "  ${ORANGE}[7]${NC}  ${WHITE}🔁  Toggle UDP-Custom Service${NC}"
+    rms_bar
+    echo -e "  ${RED}[0]${NC}  ${WHITE}⬅  Back to Main Menu${NC}"
+    rms_bar_bot
+    echo -ne "\n ${CYAN}❯ Enter selection: ${WHITE}"; read option
+    case $option in
+      1) new_user ;;
+      2) remove_user ;;
+      3) renew_user ;;
+      4) block_user ;;
+      5) detail_user ;;
+      6) expiry_log ;;
+      7) reset_udp_custom ;;
+      0) break ;;
+    esac
+  done
+}
+
+# ======== USER DETAILS ========
+detail_user() {
+  rms_banner
+  rms_bar
+  echo -e "${CYAN}║${CYAN}           👥  USER DETAILS                   ${CYAN}║${NC}"
+  rms_bar
+  data_user
+  rms_bar_bot
+  echo -ne "\n ${CYAN}❯ Press enter to continue...${NC}"; read dummy
+}
+
+# ======== MAIN MENU ========
+menu_main() {
+  while true; do
+    rms_banner
+    rms_bar
+    ram=$(free -m | awk 'NR==2{printf "%.2f%%", $3*100/$2 }')
+    cpu=$(top -bn1 | awk '/Cpu/ { cpu = "" 100 - $8 "%" }; END { print cpu }')
+    echo -e " ${CYAN}❯ IP:${NC} ${WHITE}$request_public_ip${NC}  ${CYAN}RAM:${NC} ${WHITE}$ram${NC}  ${CYAN}CPU:${NC} ${WHITE}$cpu${NC}"
+    rms_bar
+    echo -e "${CYAN}║${YELLOW}              MAIN MENU                       ${CYAN}║${NC}"
+    rms_bar
+    echo -e "  ${GREEN}[1]${NC}  ${WHITE}🌐  UDP Custom Manager${NC}"
+    echo -e "  ${YELLOW}[2]${NC}  ${WHITE}⚡  Tweak UDP Speed ${RED}[!Caution!]${NC}"
+    echo -e "  ${CYAN}[3]${NC}  ${WHITE}📊  VPS Info${NC}"
+    echo -e "  ${RED}[9]${NC}  ${WHITE}🗑  Uninstall RMS UDP Manager${NC}"
+    rms_bar
+    echo -e "  ${RED}[0]${NC}  ${WHITE}🚪  Exit${NC}"
+    rms_bar_bot
+    echo -ne "\n ${CYAN}❯ Enter selection: ${WHITE}"; read option
+    case $option in
+      1) menu_udp_custom ;;
+      2) tweak_udp_speed ;;
+      3) vps_info ;;
+      9) uninstall_rms ;;
+      0) exit 0 ;;
+    esac
+  done
+}
+
+menu_main
