@@ -9,7 +9,6 @@ GREEN='\e[1;32m'
 YELLOW='\e[1;33m'
 CYAN='\e[1;36m'
 WHITE='\e[1;97m'
-MAGENTA='\e[1;35m'
 NC='\e[0m'
 
 rms_banner() {
@@ -30,65 +29,58 @@ echo "┌───────────────────────�
 echo -e "${NC}"
 }
 
-step() {
-  echo -e "${CYAN}[RMS]${NC} ${WHITE}$1${NC}"
-}
-
-ok() {
-  echo -e "${GREEN}[✔]${NC} ${WHITE}$1${NC}"
-}
-
-fail() {
-  echo -e "${RED}[✘]${NC} ${WHITE}$1${NC}"
-  exit 1
-}
+step() { echo -e "${CYAN}[RMS]${NC} ${WHITE}$1${NC}"; }
+ok()   { echo -e "${GREEN}[✔]${NC} ${WHITE}$1${NC}"; }
+fail() { echo -e "${RED}[✘]${NC} ${WHITE}$1${NC}"; exit 1; }
 
 rms_banner
 
-# Check root
 [[ $EUID -ne 0 ]] && fail "Run as root: sudo -i"
-
-# Check OS
 grep -qi ubuntu /etc/os-release || fail "Ubuntu required"
-
-# Check arch
-[[ $(uname -m) != "x86_64" ]] && fail "x86_64 architecture required"
+[[ $(uname -m) != "x86_64" ]] && fail "x86_64 required"
 
 echo -e "${CYAN}┌──────────────────────────────────────────────┐${NC}"
 echo -e "${YELLOW}         STARTING INSTALLATION...               ${NC}"
 echo -e "${CYAN}└──────────────────────────────────────────────┘${NC}"
 echo ""
 
-# Dependencies
 step "Installing dependencies..."
 apt update -y &>/dev/null
-apt install -y wget curl screen openssl dos2unix &>/dev/null
+apt install -y wget curl screen openssl &>/dev/null
 ok "Dependencies installed"
 
-# Create directories
 step "Setting up directories..."
 mkdir -p /root/udp
 mkdir -p /etc/UDPCustom
 mkdir -p /etc/rms-users
 ok "Directories created"
 
-# Download UDP Custom binary
 step "Downloading UDP Custom binary..."
 wget -q "https://raw.github.com/http-custom/udp-custom/main/bin/udp-custom-linux-amd64" -O /root/udp/udp-custom
 chmod +x /root/udp/udp-custom
 ok "UDP Custom binary downloaded"
 
-# Download UDPGW
 step "Downloading UDPGW..."
 wget -q "https://raw.github.com/http-custom/udp-custom/main/module/udpgw" -O /bin/udpgw
 chmod +x /bin/udpgw
 ok "UDPGW downloaded"
 
-# Config file
+step "Downloading module file..."
+wget -q "https://raw.github.com/http-custom/udp-custom/main/module/module" -O /etc/UDPCustom/module
+ok "Module file downloaded"
+
+step "Prompting for port setup..."
+echo ""
+echo -e " ${YELLOW}Enter the UDP port range for your server.${NC}"
+echo -e " ${WHITE}Example: 1-65535 for full range, or 10000-60000${NC}"
+echo -ne " ${CYAN}❯ Port range (default 1-65535): ${WHITE}"; read port_range
+[[ -z "$port_range" ]] && port_range="1-65535"
+ok "Port range set to $port_range"
+
 step "Creating config..."
-cat > /root/udp/config.json << 'CONF'
+cat > /root/udp/config.json << CONF
 {
-  "listen": ":36712",
+  "listen": ":$port_range",
   "stream_buffer": 33554432,
   "receive_buffer": 83886080,
   "auth": {
@@ -96,9 +88,8 @@ cat > /root/udp/config.json << 'CONF'
   }
 }
 CONF
-ok "Config created"
+ok "Config created (port: $port_range)"
 
-# UDP Custom service
 step "Creating UDP Custom service..."
 cat > /etc/systemd/system/udp-custom.service << 'SVC'
 [Unit]
@@ -118,7 +109,6 @@ WantedBy=multi-user.target
 SVC
 ok "UDP Custom service created"
 
-# UDPGW service
 step "Creating UDPGW service..."
 cat > /etc/systemd/system/udpgw.service << 'SVC'
 [Unit]
@@ -136,8 +126,7 @@ WantedBy=multi-user.target
 SVC
 ok "UDPGW service created"
 
-# Expiry daemon
-step "Creating RMS Auto-Expiry Daemon..."
+step "Creating Auto-Expiry Daemon..."
 cat > /etc/rms-expiry.sh << 'EXPIRY'
 #!/bin/bash
 expired_found=0
@@ -171,7 +160,6 @@ EXPIRY
 chmod +x /etc/rms-expiry.sh
 ok "Auto-Expiry Daemon created"
 
-# Expiry systemd service
 step "Creating Expiry Daemon service..."
 cat > /etc/systemd/system/rms-expiry.service << 'SVC'
 [Unit]
@@ -189,58 +177,30 @@ WantedBy=multi-user.target
 SVC
 ok "Expiry Daemon service created"
 
-# Download and install RMS Manager
-step "Installing RMS UDP Custom Manager..."
+step "Installing RMS Manager..."
 wget -q "https://raw.githubusercontent.com/rseth2003/RMS-UDP-CUSTOM-MANAGER/master/udp" -O /usr/bin/udp
 chmod +x /usr/bin/udp
 ok "RMS Manager installed"
 
-# Disable firewall
 step "Disabling firewall..."
 ufw disable &>/dev/null
-apt remove --purge ufw firewalld -y &>/dev/null
 ok "Firewall disabled"
 
-# Enable and start all services
 step "Starting services..."
 systemctl daemon-reload
-
-systemctl enable udpgw &>/dev/null
-systemctl start udpgw &>/dev/null
-
-systemctl enable udp-custom &>/dev/null
-systemctl start udp-custom &>/dev/null
-
-systemctl enable rms-expiry &>/dev/null
-systemctl start rms-expiry &>/dev/null
+systemctl enable udpgw &>/dev/null && systemctl start udpgw &>/dev/null
+systemctl enable udp-custom &>/dev/null && systemctl start udp-custom &>/dev/null
+systemctl enable rms-expiry &>/dev/null && systemctl start rms-expiry &>/dev/null
 ok "All services started"
 
-# Verify
 echo ""
 echo -e "${CYAN}┌──────────────────────────────────────────────┐${NC}"
 echo -e "${YELLOW}           SERVICE STATUS CHECK                 ${NC}"
 echo -e "${CYAN}├──────────────────────────────────────────────┤${NC}"
-
-if systemctl is-active udp-custom &>/dev/null; then
-  echo -e " ${GREEN}●${NC} ${WHITE}UDP Custom   : ${GREEN}RUNNING${NC}"
-else
-  echo -e " ${RED}●${NC} ${WHITE}UDP Custom   : ${RED}STOPPED${NC}"
-fi
-
-if systemctl is-active udpgw &>/dev/null; then
-  echo -e " ${GREEN}●${NC} ${WHITE}UDPGW        : ${GREEN}RUNNING${NC}"
-else
-  echo -e " ${RED}●${NC} ${WHITE}UDPGW        : ${RED}STOPPED${NC}"
-fi
-
-if systemctl is-active rms-expiry &>/dev/null; then
-  echo -e " ${GREEN}●${NC} ${WHITE}RMS Expiry   : ${GREEN}RUNNING${NC}"
-else
-  echo -e " ${RED}●${NC} ${WHITE}RMS Expiry   : ${RED}STOPPED${NC}"
-fi
-
+systemctl is-active udp-custom &>/dev/null && echo -e " ${GREEN}●${NC} UDP Custom   : ${GREEN}RUNNING${NC}" || echo -e " ${RED}●${NC} UDP Custom   : ${RED}STOPPED${NC}"
+systemctl is-active udpgw &>/dev/null && echo -e " ${GREEN}●${NC} UDPGW        : ${GREEN}RUNNING${NC}" || echo -e " ${RED}●${NC} UDPGW        : ${RED}STOPPED${NC}"
+systemctl is-active rms-expiry &>/dev/null && echo -e " ${GREEN}●${NC} RMS Expiry   : ${GREEN}RUNNING${NC}" || echo -e " ${RED}●${NC} RMS Expiry   : ${RED}STOPPED${NC}"
 echo -e "${CYAN}└──────────────────────────────────────────────┘${NC}"
 echo ""
-echo -e "${GREEN}  Installation Complete!${NC}"
-echo -e "${YELLOW}  Run: ${WHITE}udp${NC}"
+echo -e "${GREEN}  Installation Complete! Run: ${WHITE}udp${NC}"
 echo ""
