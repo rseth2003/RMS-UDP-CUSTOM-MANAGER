@@ -199,7 +199,7 @@ new_user() {
     echo -e "${CYAN}║${GREEN}       ✔  User Created Successfully!          ${CYAN}║${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║${NC} ${YELLOW} Server IP  :${NC} ${WHITE}$request_public_ip${NC}"
-    echo -e "${CYAN}║${NC} ${YELLOW} Port       :${NC} ${WHITE}36712${NC}"
+    echo -e "${CYAN}║${NC} ${YELLOW} Port Range :${NC} ${WHITE}1-65535${NC}"
     echo -e "${CYAN}║${NC} ${YELLOW} Username   :${NC} ${WHITE}$nameuser${NC}"
     echo -e "${CYAN}║${NC} ${YELLOW} Password   :${NC} ${WHITE}$userpass${NC}"
     echo -e "${CYAN}║${NC} ${YELLOW} Duration   :${NC} ${WHITE}$dur_label${NC}"
