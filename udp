@@ -339,7 +339,7 @@ vps_info() {
   echo -e " ${CYAN}❯ CPU Load    :${NC} ${WHITE}$(top -bn1 | awk '/Cpu/ { cpu = "" 100 - $8 "%" }; END { print cpu }')${NC}"
   echo -e " ${CYAN}❯ RAM Usage   :${NC} ${WHITE}$(free -m | awk 'NR==2{printf "%.2f%%", $3*100/$2 }')${NC}"
   echo -e " ${CYAN}❯ Disk Usage  :${NC} ${WHITE}$(df -h / | awk 'NR==2{print $3"/"$2" ("$5")"}')${NC}"
-  echo -e " ${CYAN}❯ UDP Port    :${NC} ${WHITE}36712${NC}"
+  echo -e " ${CYAN}❯ UDP Port    :${NC} ${WHITE}1-65535${NC}"
   echo -ne " ${CYAN}❯ UDP Custom  :${NC} "
   systemctl is-active udp-custom &>/dev/null && echo -e "${GREEN}● RUNNING${NC}" || echo -e "${RED}● STOPPED${NC}"
   echo -ne " ${CYAN}❯ UDPGW       :${NC} "
